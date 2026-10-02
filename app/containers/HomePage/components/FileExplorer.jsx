@@ -2,6 +2,8 @@
 
 import React, { Component, Fragment } from 'react';
 import * as path from 'path';
+import * as os from 'os';
+import * as fs from 'fs';
 import classnames from 'classnames';
 import Typography from '@material-ui/core/Typography';
 import {
@@ -183,6 +185,7 @@ class FileExplorer extends Component {
     this.filesDragGhostImg = this._createDragIcon();
 
     this.initialState = {
+      openingFiles: {},
       togglePasteConfirmDialog: false,
       toggleDialog: {
         rename: {
@@ -284,12 +287,11 @@ class FileExplorer extends Component {
 
     this.deregisterAccelerators();
 
-    this.mainWindowRendererProcess.webContents.removeListener(
-      'fileExplorerToolbarActionCommunication',
-      () => {}
+    this.mainWindowRendererProcess.webContents.removeAllListeners(
+      'fileExplorerToolbarActionCommunication'
     );
-    ipcRenderer.removeListener('isFileTransferActiveSeek', () => {});
-    ipcRenderer.removeListener('isFileTransferActiveReply', () => {});
+    ipcRenderer.removeAllListeners('isFileTransferActiveSeek');
+    ipcRenderer.removeAllListeners('isFileTransferActiveReply');
 
     // Only MTP requires explicit disposal; local and adb manage their own lifecycle.
     if (deviceType === DEVICE_TYPE.mtp) {
@@ -1924,25 +1926,101 @@ class FileExplorer extends Component {
   };
 
   _handleTableDoubleClick = (item, deviceType) => {
-    const { isFolder, path } = item;
+    const { isFolder, path: itemPath } = item;
 
     const deviceTypeUpperCase = deviceType.toUpperCase();
 
     if (!isFolder) {
       if (deviceType === DEVICE_TYPE.local) {
-        shell.openPath(path);
+        shell.openPath(itemPath);
 
         analyticsService.sendEvent(
           EVENT_TYPE[`${deviceTypeUpperCase}_OPEN_FILE`],
           {}
         );
+      } else if (
+        deviceType === DEVICE_TYPE.mtp ||
+        deviceType === DEVICE_TYPE.adb
+      ) {
+        const { actionCreateThrowError, storageId } = this.props;
+        const tempDir = path.join(os.tmpdir(), 'OpenMTP_Temp');
+
+        try {
+          if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+          }
+        } catch (e) {
+          log.error(e, 'FileExplorer -> _handleTableDoubleClick -> mkdirSync');
+          actionCreateThrowError({
+            error: 'Unable to create temporary directory for opening file.',
+          });
+
+          return null;
+        }
+
+        const tempFilePath = path.join(tempDir, item.name);
+
+        this.setState((prevState) => ({
+          openingFiles: {
+            ...prevState.openingFiles,
+            [itemPath]: true,
+          },
+        }));
+
+        fileExplorerController.transferFiles({
+          deviceType,
+          destination: tempDir,
+          fileList: [itemPath],
+          direction: FILE_TRANSFER_DIRECTION.download,
+          storageId: deviceType === DEVICE_TYPE.mtp ? storageId : null,
+          onError: (error) => {
+            log.error(
+              error,
+              'FileExplorer -> _handleTableDoubleClick -> transferFiles'
+            );
+            this.setState((prevState) => {
+              const newOpening = { ...prevState.openingFiles };
+
+              delete newOpening[itemPath];
+
+              return { openingFiles: newOpening };
+            });
+            actionCreateThrowError({
+              error: `Failed to fetch file: ${error}`,
+            });
+          },
+          onPreprocess: () => {},
+          onProgress: () => {},
+          onCompleted: () => {
+            this.setState((prevState) => {
+              const newOpening = { ...prevState.openingFiles };
+
+              delete newOpening[itemPath];
+
+              return { openingFiles: newOpening };
+            });
+
+            if (fs.existsSync(tempFilePath)) {
+              shell.openPath(tempFilePath);
+              analyticsService.sendEvent(
+                EVENT_TYPE[`${deviceTypeUpperCase}_OPEN_FILE`],
+                {}
+              );
+            } else {
+              actionCreateThrowError({
+                error:
+                  'File transfer completed but file was not found in temp directory.',
+              });
+            }
+          },
+        });
       }
 
       return null;
     }
 
     this._handleListDirectory({
-      path,
+      path: itemPath,
       deviceType,
     });
 
@@ -2041,8 +2119,12 @@ class FileExplorer extends Component {
       isStatusBarEnabled,
       fileTransferClipboard,
     } = this.props;
-    const { toggleDialog, togglePasteConfirmDialog, directoryGeneratedTime } =
-      this.state;
+    const {
+      toggleDialog,
+      togglePasteConfirmDialog,
+      directoryGeneratedTime,
+      openingFiles,
+    } = this.state;
     const { rename, newFolder } = toggleDialog;
     const togglePasteDialog =
       deviceType === DEVICE_TYPE.mtp && fileTransferProgess.toggle;
@@ -2210,6 +2292,7 @@ class FileExplorer extends Component {
           tableSort={this.tableSort}
           isStatusBarEnabled={isStatusBarEnabled}
           directoryGeneratedTime={directoryGeneratedTime}
+          openingFiles={openingFiles}
           onHoverDropZoneActivate={this._handleonHoverDropZoneActivate}
           onFilesDragOver={this._handleFilesDragOver}
           onFilesDragEnd={this._handleFilesDragEnd}

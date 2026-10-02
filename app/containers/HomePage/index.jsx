@@ -81,8 +81,6 @@ class Home extends PureComponent {
       adbDevice,
     } = this.props;
 
-    const { RenderLocalPane, RenderMtpPane, RenderAdbPane } = this;
-
     // When an ADB device is selected, show the ADB pane instead of MTP.
     // The MTP pane is always available via the MTP mode; both can coexist
     // but we show whichever right-hand pane is currently active.

@@ -6,6 +6,9 @@ import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import electronIs from 'electron-is';
 import usbDetect from 'usb-detection';
 import process from 'process';
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
 import MenuBuilder from './menu';
 import { log } from './utils/log';
 import { DEBUG_PROD, IS_DEV, IS_PROD } from './constants/env';
@@ -217,8 +220,24 @@ if (!isDeviceBootable) {
     }
   }
 
+  const cleanupTempFiles = () => {
+    try {
+      const tempDir = path.join(os.tmpdir(), 'OpenMTP_Temp');
+
+      if (fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    } catch (e) {
+      log.error(e, 'main.dev -> cleanupTempFiles');
+    }
+  };
+
+  cleanupTempFiles();
+
   app.on('window-all-closed', () => {
     try {
+      cleanupTempFiles();
+
       if (process.platform === 'darwin') {
         return;
       }
