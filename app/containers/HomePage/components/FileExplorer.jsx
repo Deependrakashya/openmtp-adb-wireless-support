@@ -48,6 +48,7 @@ import {
   makeDirectoryLists,
   makeCurrentBrowsePath,
   makeMtpDevice,
+  makeAdbDevice,
   makeContextMenuList,
   makeStorageId,
   makeFileTransferClipboard,
@@ -226,15 +227,28 @@ class FileExplorer extends Component {
       deviceType,
       actionCreateInitializeMtp,
       hideHiddenFiles,
+      mtpDevice,
+      fileTransferClipboard,
     } = this.props;
 
-    if (deviceType === DEVICE_TYPE.mtp) {
+    if (
+      deviceType === DEVICE_TYPE.mtp &&
+      mtpDevice &&
+      mtpDevice.isAvailable &&
+      fileTransferClipboard &&
+      !fileTransferClipboard.queue.length
+    ) {
       actionCreateInitializeMtp({
         filePath: currentBrowsePath[deviceType],
-        ignoreHidden: hideHiddenFiles[deviceType],
+        ignoreHidden: hideHiddenFiles[deviceType] ?? true,
         deviceType,
       });
-    } else {
+    } else if (
+      deviceType === DEVICE_TYPE.local ||
+      deviceType === DEVICE_TYPE.adb
+    ) {
+      // For local and ADB, manage listings natively via FileExplorerController.
+      // The ADB pane now uses the standard pane implementation instead of the dialog overlay.
       this._handleListDirectory({
         path: currentBrowsePath[deviceType],
         deviceType,
@@ -277,6 +291,7 @@ class FileExplorer extends Component {
     ipcRenderer.removeListener('isFileTransferActiveSeek', () => {});
     ipcRenderer.removeListener('isFileTransferActiveReply', () => {});
 
+    // Only MTP requires explicit disposal; local and adb manage their own lifecycle.
     if (deviceType === DEVICE_TYPE.mtp) {
       ipcRenderer.removeListener(
         IpcEvents.REPORT_BUGS_DISPOSE_MTP,
@@ -288,7 +303,9 @@ class FileExplorer extends Component {
       );
     }
 
-    actionCreatedDisposeMtp({ deviceType });
+    if (deviceType !== DEVICE_TYPE.local && deviceType !== DEVICE_TYPE.adb) {
+      actionCreatedDisposeMtp({ deviceType });
+    }
   }
 
   registerAccelerators = () => {
@@ -473,7 +490,7 @@ class FileExplorer extends Component {
 
               actionCreateReloadDirList({
                 filePath: currentBrowsePath[deviceType],
-                ignoreHidden: hideHiddenFiles[deviceType],
+                ignoreHidden: hideHiddenFiles[deviceType] ?? true,
                 deviceType,
               });
             }
@@ -496,7 +513,7 @@ class FileExplorer extends Component {
 
             actionCreateReloadDirList({
               filePath: currentBrowsePath[deviceType],
-              ignoreHidden: hideHiddenFiles[deviceType],
+              ignoreHidden: hideHiddenFiles[deviceType] ?? true,
               deviceType,
             });
           }
@@ -535,7 +552,7 @@ class FileExplorer extends Component {
     actionCreateListDirectory(
       {
         filePath: path,
-        ignoreHidden: hideHiddenFiles[deviceType],
+        ignoreHidden: hideHiddenFiles[deviceType] ?? true,
       },
       deviceType
     );
@@ -643,6 +660,9 @@ class FileExplorer extends Component {
       return null;
     }
 
+    // For MTP, block most actions if device is unavailable.
+    // For ADB, the adbDevice availability is checked in AdbFileExplorerPane;
+    // the accelerators for refresh/up/focus-switch still make sense here.
     if (
       _focussedFileExplorerDeviceType === DEVICE_TYPE.mtp &&
       !mtpDevice.isAvailable &&
@@ -799,12 +819,14 @@ class FileExplorer extends Component {
 
         if (
           type === 'navigationLeft' &&
-          fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.list
+          (fileExplorerListingType[deviceType] ??
+            FILE_EXPLORER_VIEW_TYPE.grid) === FILE_EXPLORER_VIEW_TYPE.list
         ) {
           break;
         } else if (
           type === 'navigationUp' &&
-          fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.grid
+          (fileExplorerListingType[deviceType] ??
+            FILE_EXPLORER_VIEW_TYPE.grid) === FILE_EXPLORER_VIEW_TYPE.grid
         ) {
           break;
         }
@@ -835,12 +857,14 @@ class FileExplorer extends Component {
 
         if (
           type === 'navigationRight' &&
-          fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.list
+          (fileExplorerListingType[deviceType] ??
+            FILE_EXPLORER_VIEW_TYPE.grid) === FILE_EXPLORER_VIEW_TYPE.list
         ) {
           break;
         } else if (
           type === 'navigationDown' &&
-          fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.grid
+          (fileExplorerListingType[deviceType] ??
+            FILE_EXPLORER_VIEW_TYPE.grid) === FILE_EXPLORER_VIEW_TYPE.grid
         ) {
           break;
         }
@@ -866,12 +890,14 @@ class FileExplorer extends Component {
 
         if (
           type === 'multipleSelectLeft' &&
-          fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.list
+          (fileExplorerListingType[deviceType] ??
+            FILE_EXPLORER_VIEW_TYPE.grid) === FILE_EXPLORER_VIEW_TYPE.list
         ) {
           break;
         } else if (
           type === 'multipleSelectUp' &&
-          fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.grid
+          (fileExplorerListingType[deviceType] ??
+            FILE_EXPLORER_VIEW_TYPE.grid) === FILE_EXPLORER_VIEW_TYPE.grid
         ) {
           break;
         }
@@ -926,12 +952,14 @@ class FileExplorer extends Component {
 
         if (
           type === 'multipleSelectRight' &&
-          fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.list
+          (fileExplorerListingType[deviceType] ??
+            FILE_EXPLORER_VIEW_TYPE.grid) === FILE_EXPLORER_VIEW_TYPE.list
         ) {
           break;
         } else if (
           type === 'multipleSelectDown' &&
-          fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.grid
+          (fileExplorerListingType[deviceType] ??
+            FILE_EXPLORER_VIEW_TYPE.grid) === FILE_EXPLORER_VIEW_TYPE.grid
         ) {
           break;
         }
@@ -1013,7 +1041,8 @@ class FileExplorer extends Component {
   ) => {
     const { deviceType, mtpDevice, fileExplorerListingType } = this.props;
     const allowContextMenuClickThrough =
-      fileExplorerListingType[deviceType] === FILE_EXPLORER_VIEW_TYPE.grid &&
+      (fileExplorerListingType[deviceType] ?? FILE_EXPLORER_VIEW_TYPE.grid) ===
+        FILE_EXPLORER_VIEW_TYPE.grid &&
       !undefinedOrNull(rowData) &&
       Object.keys(rowData).length < 1;
 
@@ -1362,7 +1391,7 @@ class FileExplorer extends Component {
       },
       {
         filePath: currentBrowsePath[deviceType],
-        ignoreHidden: hideHiddenFiles[deviceType],
+        ignoreHidden: hideHiddenFiles[deviceType] ?? true,
       }
     );
 
@@ -1559,10 +1588,19 @@ class FileExplorer extends Component {
   };
 
   _handleonHoverDropZoneActivate = (deviceType) => {
-    const { filesDrag, mtpDevice } = this.props;
+    const { filesDrag, mtpDevice, adbDevice } = this.props;
     const { sourceDeviceType, destinationDeviceType } = filesDrag;
 
-    if (sourceDeviceType === destinationDeviceType || !mtpDevice.isAvailable) {
+    if (sourceDeviceType === destinationDeviceType) {
+      return false;
+    }
+
+    // Allow drop onto adb pane when an adb device is selected.
+    if (deviceType === DEVICE_TYPE.adb) {
+      return destinationDeviceType === deviceType && !!adbDevice?.selected;
+    }
+
+    if (!mtpDevice.isAvailable) {
       return false;
     }
 
@@ -1570,9 +1608,13 @@ class FileExplorer extends Component {
   };
 
   _handleIsDraggable = (deviceType) => {
-    const { directoryLists, mtpDevice } = this.props;
+    const { directoryLists, mtpDevice, adbDevice } = this.props;
     const { queue } = directoryLists[deviceType];
     const { selected } = queue;
+
+    if (deviceType === DEVICE_TYPE.adb) {
+      return selected.length > 0 && !!adbDevice?.selected;
+    }
 
     return selected.length > 0 && mtpDevice.isAvailable;
   };
@@ -1694,7 +1736,7 @@ class FileExplorer extends Component {
       },
       {
         filePath: currentBrowsePath[deviceType],
-        ignoreHidden: hideHiddenFiles[deviceType],
+        ignoreHidden: hideHiddenFiles[deviceType] ?? true,
       }
     );
 
@@ -1794,7 +1836,7 @@ class FileExplorer extends Component {
       },
       {
         filePath: destinationFolder,
-        ignoreHidden: hideHiddenFiles[deviceType],
+        ignoreHidden: hideHiddenFiles[deviceType] ?? true,
       },
       deviceType
     );
@@ -1808,7 +1850,7 @@ class FileExplorer extends Component {
     actionCreateListDirectory(
       {
         filePath: path,
-        ignoreHidden: hideHiddenFiles[deviceType],
+        ignoreHidden: hideHiddenFiles[deviceType] ?? true,
       },
       deviceType
     );
@@ -2755,6 +2797,7 @@ const mapStateToProps = (state, _) => {
   return {
     currentBrowsePath: makeCurrentBrowsePath(state),
     mtpDevice: makeMtpDevice(state),
+    adbDevice: makeAdbDevice(state),
     directoryLists: makeDirectoryLists(state),
     hideHiddenFiles: makeHideHiddenFiles(state),
     isStatusBarEnabled: makeEnableStatusBar(state),
